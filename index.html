@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Space Invaders - Fixed</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #111;
+            color: white;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100vh;
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+        h1 {
+            margin: 10px 0 5px 0;
+            font-size: 24px;
+            text-shadow: 0 0 10px #00ff00;
+        }
+        canvas {
+            border: 2px solid #333;
+            background-color: #000;
+            max-width: 95vw;
+            max-height: 55vh;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
+        }
+        .controls-container {
+            display: flex;
+            width: 95vw;
+            justify-content: space-between;
+            margin-top: 15px;
+            padding: 0 10px;
+            box-sizing: border-box;
+        }
+        .dpad {
+            display: flex;
+            gap: 10px;
+        }
+        .btn {
+            background-color: #222;
+            border: 2px solid #555;
+            color: white;
+            font-family: monospace;
+            font-size: 18px;
+            font-weight: bold;
+            padding: 20px;
+            border-radius: 8px;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+        .btn:active {
+            background-color: #00ff00;
+            color: black;
+            border-color: #fff;
+        }
+        .action-btn {
+            background-color: #441111;
+            border-color: #883333;
+            padding-left: 35px;
+            padding-right: 35px;
+        }
+        .action-btn:active {
+            background-color: #ff0055;
+            color: white;
+        }
+        .keyboard-hint {
+            margin-top: 5px;
+            color: #666;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>SPACE INVADERS</h1>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    
+    <div class="controls-container">
+        <div class="dpad">
+            <button class="btn" id="btnLeft">◀ LEFT</button>
+            <button class="btn" id="btnRight">RIGHT ▶</button>
+        </div>
+        <button class="btn action-btn" id="btnFire">FIRE 🔥</button>
+    </div>
+
+    <div class="keyboard-hint">
+        Laptop: Left/Right arrows to move, Spacebar to shoot.
+    </div>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // Campaign States
+    let currentLevel = 1;
+    const maxLevels = 10;
+    let score = 0;
+    let gameOver = false;
+    let gameWon = false;
+    let levelComplete = false;
+
+    // Control Inputs
+    const inputs = { left: false, right: false, fire: false };
+
+    // Keyboard Listeners
+    window.addEventListener("keydown", function(e) {
+        if (e.code === "ArrowLeft") inputs.left = true;
+        if (e.code === "ArrowRight") inputs.right = true;
+        if (e.code === "Space") inputs.fire = true;
+    });
+    window.addEventListener("keyup", function(e) {
+        if (e.code === "ArrowLeft") inputs.left = false;
+        if (e.code === "ArrowRight") inputs.right = false;
+        if (e.code === "Space") inputs.fire = false;
+    });
+
+    // Touch Button Processing
+    function setupTouchButton(elementId, inputProperty) {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+        
+        el.addEventListener("touchstart", function(e) { 
+            e.preventDefault(); 
+            inputs[inputProperty] = true; 
+        }, { passive: false });
+        
+        el.addEventListener("touchend", function(e) { 
+            e.preventDefault(); 
+            inputs[inputProperty] = false; 
+        }, { passive: false });
+        
+        el.addEventListener("touchcancel", function(e) { 
+            e.preventDefault(); 
+            inputs[inputProperty] = false; 
+        }, { passive: false });
+
+        // Desktop Fallbacks
+        el.addEventListener("mousedown", function() { inputs[inputProperty] = true; });
+        el.addEventListener("mouseup", function() { inputs[inputProperty] = false; });
+        el.addEventListener("mouseleave", function() { inputs[inputProperty] = false; });
+    }
+
+    setupTouchButton("btnLeft", "left");
+    setupTouchButton("btnRight", "right");
+    setupTouchButton("btnFire", "fire");
+
+    // Screen Intercept Handling (Fixed Navigation)
+    function handleScreenTap() {
+        if (gameOver || gameWon) {
+            resetEntireGame();
+        } else if (levelComplete) {
+            advanceLevel();
+        }
+    }
+    
+    canvas.addEventListener("click", handleScreenTap);
+    canvas.addEventListener("touchstart", function(e) {
+        e.preventDefault();
+        handleScreenTap();
+    }, { passive: false });
+
+    // Entities
+    const player = {
+        x: 380,
+        y: 550,
+        width: 40,
+        height: 20,
+        speed: 7,
+        color: "#00ff00"
+    };
+
+    let lasers = [];
+    const laserSpeed = 9;
+    let lastShotTime = 0;
+    const shotCooldown = 250; 
+
+    let invaders = [];
+    const invaderRows = 4;
+    const invaderCols = 8;
+    const invaderWidth = 40;
+    const invaderHeight = 25;
+    
+    let invaderDirection = 1; 
+    let baseInvaderSpeed = 1.0;
+    let invaderSpeed = 1.0;
+    let invaderDropDistance = 15;
+
+    function initLevel(level) {
+        invaders = [];
+        lasers = [];
+        player.x = canvas.width / 2 - 20;
+        invaderDirection = 1;
+        
+        baseInvaderSpeed = 1.0 + (level - 1) * 0.4; 
+        invaderSpeed = baseInvaderSpeed;
+
+        for (let r = 0; r < invaderRows; r++) {
+            for (let c = 0; c < invaderCols; c++) {
+                invaders.push({
+                    x: c * (invaderWidth + 25) + 80,
+                    y: r * (invaderHeight + 20) + 70,
+                    width: invaderWidth,
+                    height: invaderHeight,
+                    color: r % 2 === 0 ? "#ff00ff" : "#00ffff"
+                });
+            }
+        }
+        levelComplete = false;
+    }
+
+    function advanceLevel() {
+        currentLevel++;
+        if (currentLevel > maxLevels) {
+            gameWon = true;
+        } else {
+            initLevel(currentLevel);
+        }
+    }
+
+    function resetEntireGame() {
+        currentLevel = 1;
+        score = 0;
+        gameOver = false;
+        gameWon = false;
+        initLevel(currentLevel);
+    }
+
+    function rectCollision(rect1, rect2) {
+        return rect1.x < rect2.x + rect2.width &&
+               rect1.x + rect1.width > rect2.x &&
+               rect1.y < rect2.y + rect2.height &&
+               rect1.y + rect1.height > rect2.y;
+    }
+
+    function update() {
+        if (gameOver || gameWon || levelComplete) return;
+
+        if (inputs.left && player.x > 0) player.x -= player.speed;
+        if (inputs.right && player.x < canvas.width - player.width) player.x += player.speed;
+
+        if (inputs.fire) {
+            const currentTime = Date.now();
+            if (currentTime - lastShotTime > shotCooldown) {
+                lasers.push({
+                    x: player.x + player.width / 2 - 2,
+                    y: player.y,
+                    width: 4,
+                    height: 15,
+                    color: "#ffff00"
+                });
+                lastShotTime = currentTime;
+            }
+        }
+
+        for (let i = lasers.length - 1; i >= 0; i--) {
+            lasers[i].y -= laserSpeed;
+            if (lasers[i].y < 0) lasers.splice(i, 1);
+        }
+
+        let shiftDown = false;
+        for (let i = 0; i < invaders.length; i++) {
+            invaders[i].x += invaderSpeed * invaderDirection;
+            if (invaders[i].x <= 10 || invaders[i].x + invaders[i].width >= canvas.width - 10) {
+                shiftDown = true;
+            }
+        }
+
+        if (shiftDown) {
+            invaderDirection *= -1;
+            for (let i = 0; i < invaders.length; i++) {
+                invaders[i].y += invaderDropDistance;
+                if (invaders[i].y + invaders[i].height >= player.y) {
+                    gameOver = true;
+                }
+            }
+        }
+
+        for (let lIndex = lasers.length - 1; lIndex >= 0; lIndex--) {
+            for (let iIndex = invaders.length - 1; iIndex >= 0; iIndex--) {
+                if (rectCollision(lasers[lIndex], invaders[iIndex])) {
+                    invaders.splice(iIndex, 1);
+                    lasers.splice(lIndex, 1);
+                    score += 10 * currentLevel; 
+                    invaderSpeed += 0.12; 
+                    break; 
+                }
+            }
+        }
+
+        if (invaders.length === 0) {
+            if (currentLevel === maxLevels) {
+                gameWon = true;
+            } else {
+                levelComplete = true;
+            }
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Player
+        ctx.fillStyle = player.color;
+        ctx.fillRect(player.x, player.y + 5, player.width, player.height - 5);
+        ctx.fillRect(player.x + player.width / 2 - 4, player.y, 8, 5); 
+
+        // Lasers
+        for (let i = 0; i < lasers.length; i++) {
+            ctx.fillStyle = lasers[i].color;
+            ctx.fillRect(lasers[i].x, lasers[i].y, lasers[i].width, lasers[i].height);
+        }
+
+        // Invaders
+        for (let i = 0; i < invaders.length; i++) {
+            ctx.fillStyle = invaders[i].color;
+            ctx.fillRect(invaders[i].x, invaders[i].y, invaders[i].width, invaders[i].height);
+            ctx.fillStyle = "#000";
+            ctx.fillRect(invaders[i].x + 8, invaders[i].y + 6, 6, 6);
+            ctx.fillRect(invaders[i].x + invaders[i].width - 14, invaders[i].y + 6, 6, 6);
+        }
+
+        // HUD
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "20px 'Courier New'";
+        ctx.textAlign = "left";
+        ctx.fillText("SCORE: " + score, 20, 35);
+        ctx.textAlign = "right";
+        ctx.fillText("LEVEL: " + currentLevel + "/" + maxLevels, canvas.width - 20, 35);
+
+        // State Overlays
+        if (gameOver) {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#ff0000";
+            ctx.font = "40px 'Courier New'";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2);
+            ctx.font = "18px 'Courier New'";
+            ctx.fillStyle = "#fff";
+            ctx.fillText("Tap screen to restart campaign", canvas.width / 2, canvas.height / 2 + 50);
+        } else if (levelComplete) {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#00ffff";
+            ctx.font = "35px 'Courier New'";
+            ctx.textAlign = "center";
+            ctx.fillText("LEVEL " + currentLevel + " CLEARED!", canvas.width / 2, canvas.height / 2);
+            ctx.font = "18px 'Courier New'";
+            ctx.fillStyle = "#fff";
+            ctx.fillText("Tap screen to launch Level " + (currentLevel + 1), canvas.width / 2, canvas.height / 2 + 50);
+        } else if (gameWon) {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.9)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#00ff00";
+            ctx.font = "40px 'Courier New'";
+            ctx.textAlign = "center";
+            ctx.fillText("GALAXY SAVED!", canvas.width / 2, canvas.height / 2);
+            ctx.font = "20px 'Courier New'";
+            ctx.fillStyle = "#fff";
+            ctx.fillText("Final Campaign Score: " + score, canvas.width / 2, canvas.height / 2 + 40);
+            ctx.fillText("Tap screen to play again", canvas.width / 2, canvas.height / 2 + 80);
+        }
+    }
+
+    function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    // Explicit Startup Execution
+    initLevel(currentLevel);
+    gameLoop();
+</script>
+
+</body>
+</html>
